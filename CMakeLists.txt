@@ -56,7 +56,7 @@ target_link_libraries(
     ${HDF5_LIBRARIES}
     ${HDF5_HL_LIBRARIES}
 )
-target_link_libraries(VoxelizeHDF PUBLIC -ldl -static)
+#target_link_libraries(VoxelizeHDF PUBLIC -ldl -static)
 
 install(
     TARGETS ${PROJECT_NAME} 
