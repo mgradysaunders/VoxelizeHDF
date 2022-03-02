@@ -1,0 +1,21 @@
+BasedOnStyle: Google
+DerivePointerAlignment: false
+PointerAlignment: Left
+FixNamespaceComments: false
+AlwaysBreakBeforeMultilineStrings: false
+AlignAfterOpenBracket: AlwaysBreak
+BinPackParameters: false
+Standard: c++17
+
+SortIncludes: true
+IncludeIsMainRegex: '(_test|Test|Tests)?$'
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex:           '^<((.*\.(h|hpp))|((eigen3/)?Eigen.*)|(Q.*))>'
+    Priority:        2
+  - Regex:           '^<.*'
+    Priority:        1
+  - Regex:           '^"dirsig*/.*'
+    Priority:        3
+  - Regex:           '.*'
+    Priority:        4

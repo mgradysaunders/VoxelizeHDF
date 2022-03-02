@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=VoxelizeHDF
+Comment=A DIRSIG5 HDF Voxelizer
+Exec=VoxelizeHDF
+Icon=icon
+Categories=Utility
+Terminal=true
