@@ -26,12 +26,12 @@ void QuitWithHint() {
 struct VoxelRegion {
   enum class Mode { Area, CosineArea, Normal };
   void add(pre::Vec3f point, float area) {
-    pre::Vec3<uint64_t> index = (point - bound.min()) * invVoxelSize;
+    pre::Vec3<uint64_t> index = (point - bound.lower()) * invVoxelSize;
     if (!(index < count).all()) return;
     voxelData[(index[0] * count[1] + index[1]) * count[2] + index[2]] += area;
   }
   void add(pre::Vec3f point, pre::Vec3f normal) {
-    pre::Vec3<uint64_t> index = (point - bound.min()) * invVoxelSize;
+    pre::Vec3<uint64_t> index = (point - bound.lower()) * invVoxelSize;
     if (!(index < count).all()) return;
     uint64_t i = (index[0] * count[1] + index[1]) * count[2] + index[2];
     voxelData[i * 3 + 0] += normal[0];
@@ -96,7 +96,7 @@ struct VoxelRegion {
   pre::Vec3<uint64_t> count = {128, 128, 128};
   std::vector<float> voxelData;
   std::string outputFilename = "Voxels.bin";
-  pre::LowDiscrepancySequence<float, 2> seq;
+  pre::monte_carlo::LowDiscrepancySequence2f seq;
   std::string includedIds;
   std::string excludedIds;
 };
@@ -141,7 +141,7 @@ int main(int argc, char** argv) {
         "Answer yes to all confirmation questions. Only use this if you know "
         "what you are doing!";
     options.on_option("--version", [] {
-      std::cout << "Version 1.3" << std::endl;
+      std::cout << "Version 1.4" << std::endl;
       std::exit(EXIT_SUCCESS);
     }) = "Show the current version number.";
     options.on_positional([&filename](std::string_view argv) {
@@ -342,6 +342,7 @@ struct Record {
   HDFData::FacetObject* object = nullptr;
   pre::Mat4f transform = pre::Mat4f::identity();
   bool isLeaf = true;
+  unsigned typeIndex = 0;
 
   HDFData::FacetObject* RootObject() {
     Record* record = this;
@@ -385,11 +386,12 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
   if (not region.includedIds.empty() or  //
       not region.excludedIds.empty()) {
     materialsOk.resize(hdfData.materialNames.size(), true);
+    bool anyExcluded = false;
     if (not region.includedIds.empty()) try {  // Exclude non-matches
         std::regex regex(region.includedIds);
         for (size_t i = 0; i < hdfData.materialNames.size(); i++)
           if (not std::regex_match(hdfData.materialNames[i], regex))
-            materialsOk[i] = false;
+            materialsOk[i] = false, anyExcluded = true;
       } catch (const std::regex_error& error) {
         std::cerr << "Exception while handling regex "
                   << pre::show(region.includedIds) << '\n';
@@ -400,7 +402,7 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
         std::regex regex(region.excludedIds);
         for (size_t i = 0; i < hdfData.materialNames.size(); i++)
           if (std::regex_match(hdfData.materialNames[i], regex))
-            materialsOk[i] = false;
+            materialsOk[i] = false, anyExcluded = true;
       } catch (const std::regex_error& error) {
         std::cerr << "Exception while handling regex "
                   << pre::show(region.excludedIds) << '\n';
@@ -411,9 +413,15 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
     int totalOk = 0;
     for (bool ok : materialsOk)
       if (ok) totalOk++;
-    std::cout << "Excluded " << materialsOk.size() - totalOk << " of "
+    std::cerr << "Excluded " << materialsOk.size() - totalOk << " of "
               << materialsOk.size() << " materials from the voxelization."
               << std::endl;
+    if (anyExcluded) {
+      std::cerr << "Included materials after filtering:" << std::endl;
+      for (size_t i = 0; i < hdfData.materialNames.size(); i++)
+        if (materialsOk[i])
+          std::cerr << "  " << hdfData.materialNames[i] << std::endl;
+    }
   }
   Records records(hdfData.master.size());
   for (size_t index = 0; index < records.size(); index++) {
@@ -425,6 +433,7 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
       record.parent = &records[parentIndex];
       record.parent->isLeaf = false;
     }
+    record.typeIndex = typeIndex;
     if (type != 1) record.isLeaf = false;
     if (type == 1) {  // Static instance?
       record.transform = hdfData.transforms[typeIndex];
@@ -494,7 +503,7 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
     record->object->Voxelize(
         record->transform, region,
         hdfData.materialRemap.data.data() +
-            hdfData.materialRemap.ranges[record - records.data()].first,
+            hdfData.materialRemap.ranges[record->typeIndex].first,
         materialsOk);
   }
   std::cerr << std::endl;
