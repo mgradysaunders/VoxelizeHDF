@@ -38,8 +38,8 @@ struct VoxelRegion {
     voxelData[i * 3 + 1] += normal[1];
     voxelData[i * 3 + 2] += normal[2];
   }
-  void add(const pre::Triangle3f& tri) {
-    pre::Bound3f triBound = tri;
+  void add(const pre::geom::Triangle3f& tri) {
+    pre::geom::Bound3f triBound = tri;
     if (!bound.overlaps(triBound)) return;
     pre::Vec3f normal = tri.normal();
     if (normal[2] < 0) normal *= -1;
@@ -89,7 +89,7 @@ struct VoxelRegion {
   }
 
   Mode mode = Mode::Area;
-  pre::Bound3f bound;
+  pre::geom::Bound3f bound;
   float voxelSizeZ = 0;
   pre::Vec3<float> voxelSize;
   pre::Vec3<float> invVoxelSize;
@@ -252,7 +252,7 @@ struct HDFData {
   }
 
   struct FacetObject {
-    pre::Bound3f bound;
+    pre::geom::Bound3f bound;
     std::vector<pre::Vec3<float>> verts;
     std::vector<pre::Vec3<unsigned>> faces;
     std::vector<unsigned> materials;
@@ -283,7 +283,7 @@ struct HDFData {
       auto materialIter = materials.begin();
       for (const auto& face : faces) {
         if (materialsOk.empty() or materialsOk[remap[*materialIter++]]) {
-          pre::Triangle3f tri = {
+          pre::geom::Triangle3f tri = {
               pre::dot(linear, verts[face[0]]) + affine,
               pre::dot(linear, verts[face[1]]) + affine,
               pre::dot(linear, verts[face[2]]) + affine};
@@ -354,10 +354,10 @@ struct Record {
     return parent ? pre::dot(parent->FullTransform(), transform) : transform;
   }
 
-  pre::Bound3f ObjectBound() const {
+  pre::geom::Bound3f ObjectBound() const {
     THROW_IF(not object, "Object should be non-NULL by now!");
-    pre::Bound3f bound = object->bound;
-    pre::Bound3f result;
+    pre::geom::Bound3f bound = object->bound;
+    pre::geom::Bound3f result;
     for (auto [i, j, k] : pre::ArrayRange(2, 2, 2))
       result |= pre::homogeneous_dot(
           transform, pre::Vec3f{bound[i][0], bound[j][1], bound[k][2]});
@@ -370,7 +370,7 @@ struct Record {
     pre::Vec3f affine = transform.col(3).head<3>();
     for (pre::Vec3f v : object->verts) {
       v = pre::dot(linear, v) + affine;
-      if (pre::Bound2f(region.bound).contains(pre::Vec2f(v))) {
+      if (pre::geom::Bound2f(region.bound).contains(pre::Vec2f(v))) {
         zmin = std::min(zmin, v[2]);
         zmax = std::max(zmax, v[2]);
       }
@@ -416,12 +416,12 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
     std::cerr << "Excluded " << materialsOk.size() - totalOk << " of "
               << materialsOk.size() << " materials from the voxelization."
               << std::endl;
-    if (anyExcluded) {
+    //if (anyExcluded) {
       std::cerr << "Included materials after filtering:" << std::endl;
       for (size_t i = 0; i < hdfData.materialNames.size(); i++)
         if (materialsOk[i])
           std::cerr << "  " << hdfData.materialNames[i] << std::endl;
-    }
+    //}
   }
   Records records(hdfData.master.size());
   for (size_t index = 0; index < records.size(); index++) {
@@ -451,9 +451,9 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
       if (not object) continue;
       record.object = object;
       record.transform = record.FullTransform();
-      pre::Bound3f bound = record.ObjectBound();
+      pre::geom::Bound3f bound = record.ObjectBound();
       if (region.voxelSizeZ > 0) {
-        if (pre::Bound2f(region.bound).overlaps(bound)) {
+        if (pre::geom::Bound2f(region.bound).overlaps(bound)) {
           record.TrueZBound(region, zmin, zmax);
           recordsToVoxelize.push_back(&record);
         }

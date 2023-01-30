@@ -31,6 +31,7 @@ message(STATUS "INSTALL_LIBDIR: ${CMAKE_INSTALL_LIBDIR}")
 message(STATUS "INSTALL_BINDIR: ${CMAKE_INSTALL_BINDIR}")
 
 set(HDF5_USE_STATIC_LIBRARIES ON)
+find_package(fmt REQUIRED)
 find_package(Precept REQUIRED)
 find_package(HDF5 1.10.0 COMPONENTS C CXX HL REQUIRED)
 
@@ -52,11 +53,12 @@ target_include_directories(
 target_link_libraries(
     VoxelizeHDF 
   PUBLIC
-    Precept::Precept
+    Precept::headers
+    Precept::geometry
     ${HDF5_LIBRARIES}
     ${HDF5_HL_LIBRARIES}
 )
-#target_link_libraries(VoxelizeHDF PUBLIC -ldl -static)
+target_link_libraries(VoxelizeHDF PUBLIC -ldl -static)
 
 install(
     TARGETS ${PROJECT_NAME} 
