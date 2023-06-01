@@ -24,7 +24,7 @@ void QuitWithHint() {
 }
 
 struct VoxelRegion {
-  enum class Mode { Area, CosineArea, Normal };
+  enum class Mode { Area, CosineArea, Normal, Intensity };
   void add(pre::Vec3f point, float area) {
     pre::Vec3<uint64_t> index = (point - bound.lower()) * invVoxelSize;
     if (!(index < count).all()) return;
@@ -38,13 +38,14 @@ struct VoxelRegion {
     voxelData[i * 3 + 1] += normal[1];
     voxelData[i * 3 + 2] += normal[2];
   }
-  void add(const pre::geom::Triangle3f& tri) {
+  void add(const pre::geom::Triangle3f& tri, float scattering = 1.0f) {
     pre::geom::Bound3f triBound = tri;
     if (!bound.overlaps(triBound)) return;
     pre::Vec3f normal = tri.normal();
     if (normal[2] < 0) normal *= -1;
     float area = pre::sqrt(pre::length2(normal)) * 0.5f;
     if (mode == Mode::CosineArea) area = normal[2];
+    if (mode == Mode::Intensity) area *= scattering;
     if (!std::isfinite(area)) return;
     pre::Vec3f triExtent = triBound.extent();
     pre::Vec3f triCenter = tri.center();
@@ -141,7 +142,7 @@ int main(int argc, char** argv) {
         "Answer yes to all confirmation questions. Only use this if you know "
         "what you are doing!";
     options.on_option("--version", [] {
-      std::cout << "Version 1.4" << std::endl;
+      std::cout << "Version 1.5" << std::endl;
       std::exit(EXIT_SUCCESS);
     }) = "Show the current version number.";
     options.on_positional([&filename](std::string_view argv) {
@@ -155,6 +156,8 @@ int main(int argc, char** argv) {
     std::cerr << "Expected a filename!\n";
     QuitWithHint();
   }
+  if (region.count[0] <= 1) region.count[0] = 1;
+  if (region.count[1] <= 1) region.count[1] = 1;
   if (!mode.empty()) {
     if (mode == "area")
       region.mode = VoxelRegion::Mode::Area;
@@ -162,6 +165,8 @@ int main(int argc, char** argv) {
       region.mode = VoxelRegion::Mode::CosineArea;
     else if (mode == "normal")
       region.mode = VoxelRegion::Mode::Normal;
+    else if (mode == "intensity")
+      region.mode = VoxelRegion::Mode::Intensity;
     else {
       std::cerr << "The mode is invalid!\n";
       std::cerr << "This must be 'area', 'cosine-area', or 'normal'.\n\n";
@@ -277,17 +282,19 @@ struct HDFData {
         const pre::Mat4f& transform,
         VoxelRegion& region,
         const uint32_t* remap,
-        const std::vector<bool>& materialsOk) {
+        const std::vector<bool>& materialsOk,
+        const std::vector<float>& scattering) {
       pre::Mat3f linear = transform;
       pre::Vec3f affine = transform.col(3).head<3>();
       auto materialIter = materials.begin();
       for (const auto& face : faces) {
-        if (materialsOk.empty() or materialsOk[remap[*materialIter++]]) {
+        auto material = remap[*materialIter++];
+        if (materialsOk.empty() or materialsOk[material]) {
           pre::geom::Triangle3f tri = {
               pre::dot(linear, verts[face[0]]) + affine,
               pre::dot(linear, verts[face[1]]) + affine,
               pre::dot(linear, verts[face[2]]) + affine};
-          region.add(tri);
+          region.add(tri, scattering.at(material));
         }
       }
     }
@@ -321,11 +328,66 @@ struct HDFData {
     return affines;
   }
 
+  static std::vector<float> ReadLidarScattering(H5::H5File& file) {
+    std::vector<float> scattering;
+    size_t wavelengthIndex{};
+    size_t wavelengthCount{};
+    {
+      auto dataSet = file.openDataSet("SpectralSamples");
+      std::vector<float> wavelengths;
+      wavelengths.resize(dataSet.getSpace().getSimpleExtentNpoints());
+      dataSet.read(wavelengths.data(), dataSet.getDataType());
+      wavelengthCount = wavelengths.size();
+      wavelengthIndex =
+          std::lower_bound(wavelengths.begin(), wavelengths.end(), 1.064f) -
+          wavelengths.begin();
+      if (wavelengthIndex >= wavelengthCount)
+        wavelengthIndex = wavelengthCount - 1;
+    }
+    std::vector<uint32_t> lookup;
+    {
+      auto dataSet = file.openGroup("Materials")
+                         .openGroup("OpticalProperties")
+                         .openDataSet("Index");
+      scattering.resize(dataSet.getSpace().getSimpleExtentNpoints());
+      lookup.resize(3 * dataSet.getSpace().getSimpleExtentNpoints());
+      dataSet.read(lookup.data(), dataSet.getDataType());
+    }
+    {
+      auto dataSet = file.openGroup("Materials")
+                         .openGroup("OpticalProperties")
+                         .openGroup("DiffuseReflectance")
+                         .openDataSet("SpectralCurves");
+      std::vector<float> curves;
+      curves.resize(dataSet.getSpace().getSimpleExtentNpoints());
+      dataSet.read(curves.data(), dataSet.getDataType());
+      for (size_t i = 0; i < lookup.size() / 3; i++)
+        scattering[i] =
+            curves[wavelengthCount * lookup[3 * i + 1] + wavelengthIndex];
+    }
+    {
+      auto dataSet = file.openGroup("Materials")
+                         .openGroup("OpticalProperties")
+                         .openGroup("DiffuseTransmission")
+                         .openDataSet("SpectralCurves");
+      std::vector<float> curves;
+      curves.resize(dataSet.getSpace().getSimpleExtentNpoints());
+      dataSet.read(curves.data(), dataSet.getDataType());
+      for (size_t i = 0; i < lookup.size() / 3; i++) {
+        if (lookup[3 * i + 2] > 0)
+          scattering[i] +=
+              curves[wavelengthCount * lookup[3 * i + 2] + wavelengthIndex];
+      }
+    }
+    return scattering;
+  }
+
   MasterTableRecords master;
   MaterialNames materialNames;
   MaterialRemap materialRemap;
   FacetObjects objects;
   Affines transforms;
+  std::vector<float> scattering;
 
   HDFData(const std::string& filename) {
     H5::H5File file(filename, H5F_ACC_RDONLY);
@@ -334,6 +396,7 @@ struct HDFData {
     materialRemap = ReadMaterialRemap(file);
     objects = ReadFacetObjects(file);
     transforms = ReadInstanceTransforms(file);
+    scattering = ReadLidarScattering(file);
   }
 };
 
@@ -416,11 +479,11 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
     std::cerr << "Excluded " << materialsOk.size() - totalOk << " of "
               << materialsOk.size() << " materials from the voxelization."
               << std::endl;
-    //if (anyExcluded) {
-      std::cerr << "Included materials after filtering:" << std::endl;
-      for (size_t i = 0; i < hdfData.materialNames.size(); i++)
-        if (materialsOk[i])
-          std::cerr << "  " << hdfData.materialNames[i] << std::endl;
+    // if (anyExcluded) {
+    std::cerr << "Included materials after filtering:" << std::endl;
+    for (size_t i = 0; i < hdfData.materialNames.size(); i++)
+      if (materialsOk[i])
+        std::cerr << "  " << hdfData.materialNames[i] << std::endl;
     //}
   }
   Records records(hdfData.master.size());
@@ -445,10 +508,10 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
   float zmin = +INFINITY;
   float zmax = -INFINITY;
   std::vector<Record*> recordsToVoxelize;
-  for (auto& record : records)
+  for (auto& record : records) {
     if (record.isLeaf) {
       auto* object = record.RootObject();
-      if (not object) continue;
+      if (!object) continue;
       record.object = object;
       record.transform = record.FullTransform();
       pre::geom::Bound3f bound = record.ObjectBound();
@@ -456,11 +519,16 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
         if (pre::geom::Bound2f(region.bound).overlaps(bound)) {
           record.TrueZBound(region, zmin, zmax);
           recordsToVoxelize.push_back(&record);
+          std::cout << &record - &records[0] << '/' << records.size()
+                    << std::endl;
         }
       } else if (region.bound.overlaps(bound)) {
         recordsToVoxelize.push_back(&record);
+        std::cout << &record - &records[0] << '/' << records.size()
+                  << std::endl;
       }
     }
+  }
   if (recordsToVoxelize.empty()) {
     std::cerr << "There is no geometry to voxelize in the specified region!\n"
                  "HINT: If you use the option '--fit-z', the program will fit "
@@ -504,7 +572,7 @@ void Voxelize(const std::string& filename, VoxelRegion& region) {
         record->transform, region,
         hdfData.materialRemap.data.data() +
             hdfData.materialRemap.ranges[record->typeIndex].first,
-        materialsOk);
+        materialsOk, hdfData.scattering);
   }
   std::cerr << std::endl;
   if (region.mode == VoxelRegion::Mode::Normal) {
